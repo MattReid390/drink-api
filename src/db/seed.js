@@ -1,3 +1,4 @@
+require('dotenv').config();
 const pool = require('./config');
 const { createTables } = require('./schema');
 
