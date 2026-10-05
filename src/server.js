@@ -4,18 +4,27 @@ const cors = require('cors');
 const venueRoutes = require('./routes/venues');
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
+const analyticsRoutes = require('./routes/analytics');
+const exportRoutes = require('./routes/export');
+const importRoutes = require('./routes/import');
+const adminRoutes = require('./routes/admin');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb' }));
 
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/venues', venueRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/export', exportRoutes);
+app.use('/api/import', importRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
