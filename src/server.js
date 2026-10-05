@@ -8,6 +8,7 @@ const analyticsRoutes = require('./routes/analytics');
 const exportRoutes = require('./routes/export');
 const importRoutes = require('./routes/import');
 const adminRoutes = require('./routes/admin');
+const premiumRoutes = require('./routes/premium');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -25,6 +26,7 @@ app.use('/api/analytics', analyticsRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/import', importRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/premium', premiumRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
