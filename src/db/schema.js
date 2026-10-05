@@ -1,6 +1,28 @@
 const pool = require('./config');
 
 const createTablesSQL = `
+  CREATE TABLE IF NOT EXISTS users (
+    id UUID PRIMARY KEY,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password VARCHAR(255) NOT NULL,
+    name VARCHAR(255),
+    verified BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS user_settings (
+    id SERIAL PRIMARY KEY,
+    user_id UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    daily_limit_units DECIMAL(10, 2) DEFAULT 14,
+    weekly_limit_units DECIMAL(10, 2) DEFAULT 98,
+    notifications_enabled BOOLEAN DEFAULT TRUE,
+    dark_mode BOOLEAN DEFAULT FALSE,
+    preferred_units VARCHAR(20) DEFAULT 'units',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS venues (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
@@ -38,6 +60,7 @@ const createTablesSQL = `
 
   CREATE INDEX IF NOT EXISTS idx_drinks_venue_id ON drinks(venue_id);
   CREATE INDEX IF NOT EXISTS idx_venues_coordinates ON venues(latitude, longitude);
+  CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 `;
 
 async function createTables() {

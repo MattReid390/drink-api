@@ -2,7 +2,9 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const userStorage = require('../services/userStorage');
+const UserModel = require('../models/userModel');
+const verificationCodes = new Map();
+const resetCodes = new Map();
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
@@ -40,7 +42,8 @@ router.post('/signup', async (req, res) => {
     }
 
     // Check if user already exists
-    if (userStorage.getUserByEmail(email)) {
+    const existingUser = await UserModel.getByEmail(email);
+    if (existingUser) {
       return res.status(409).json({ error: 'Email already registered' });
     }
 
@@ -49,11 +52,18 @@ router.post('/signup', async (req, res) => {
 
     // Create user
     const userId = generateId();
-    const user = userStorage.createUser(userId, email, hashedPassword, name || '');
+    const user = await UserModel.create(userId, email, hashedPassword, name || '');
+
+    // Create default user settings
+    await UserModel.createSettings(userId);
 
     // Generate and store verification code
     const verificationCode = generateCode();
-    userStorage.storeVerificationCode(email, verificationCode);
+    verificationCodes.set(email, {
+      code: verificationCode,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 15 * 60 * 1000,
+    });
 
     // Log verification code (in production, send via email)
     console.log(`✉️  Verification code for ${email}: ${verificationCode}`);
@@ -78,14 +88,14 @@ router.post('/verify-email', async (req, res) => {
       return res.status(400).json({ error: 'Email and code required' });
     }
 
-    const stored = userStorage.getVerificationCode(email);
+    const stored = verificationCodes.get(email);
 
     if (!stored) {
       return res.status(400).json({ error: 'No verification code found' });
     }
 
     if (Date.now() > stored.expiresAt) {
-      userStorage.deleteVerificationCode(email);
+      verificationCodes.delete(email);
       return res.status(400).json({ error: 'Verification code expired' });
     }
 
@@ -94,10 +104,10 @@ router.post('/verify-email', async (req, res) => {
     }
 
     // Mark user as verified
-    const user = userStorage.getUserByEmail(email);
+    const user = await UserModel.getByEmail(email);
     if (user) {
-      userStorage.updateUser(user.id, { verified: true });
-      userStorage.deleteVerificationCode(email);
+      await UserModel.update(user.id, { verified: true });
+      verificationCodes.delete(email);
 
       res.json({
         message: 'Email verified successfully',
@@ -122,7 +132,7 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Email and password required' });
     }
 
-    const user = userStorage.getUserByEmail(email);
+    const user = await UserModel.getByEmailWithPassword(email);
 
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
@@ -135,7 +145,7 @@ router.post('/login', async (req, res) => {
     }
 
     // Generate tokens
-    const accessToken = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, {
+    const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, {
       expiresIn: '15m',
     });
 
@@ -144,7 +154,7 @@ router.post('/login', async (req, res) => {
     });
 
     res.json({
-      accessToken,
+      token,
       refreshToken,
       user: {
         id: user.id,
@@ -170,17 +180,17 @@ router.post('/refresh', async (req, res) => {
 
     try {
       const decoded = jwt.verify(refreshToken, REFRESH_SECRET);
-      const user = userStorage.getUserById(decoded.userId);
+      const user = await UserModel.getById(decoded.userId);
 
       if (!user) {
         return res.status(401).json({ error: 'User not found' });
       }
 
-      const newAccessToken = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, {
+      const newToken = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, {
         expiresIn: '15m',
       });
 
-      res.json({ accessToken: newAccessToken });
+      res.json({ token: newToken });
     } catch (error) {
       res.status(401).json({ error: 'Invalid or expired refresh token' });
     }
@@ -199,7 +209,7 @@ router.post('/request-password-reset', async (req, res) => {
       return res.status(400).json({ error: 'Email required' });
     }
 
-    const user = userStorage.getUserByEmail(email);
+    const user = await UserModel.getByEmail(email);
 
     if (!user) {
       // Don't reveal if email exists (security best practice)
@@ -208,7 +218,11 @@ router.post('/request-password-reset', async (req, res) => {
 
     // Generate and store reset code
     const resetCode = generateCode();
-    userStorage.storeResetCode(email, resetCode);
+    resetCodes.set(email, {
+      code: resetCode,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 30 * 60 * 1000,
+    });
 
     // Log reset code (in production, send via email)
     console.log(`🔐 Password reset code for ${email}: ${resetCode}`);
@@ -233,14 +247,14 @@ router.post('/reset-password', async (req, res) => {
       return res.status(400).json({ error: 'Password must be at least 8 characters' });
     }
 
-    const stored = userStorage.getResetCode(email);
+    const stored = resetCodes.get(email);
 
     if (!stored) {
       return res.status(400).json({ error: 'No reset code found' });
     }
 
     if (Date.now() > stored.expiresAt) {
-      userStorage.deleteResetCode(email);
+      resetCodes.delete(email);
       return res.status(400).json({ error: 'Reset code expired' });
     }
 
@@ -248,7 +262,7 @@ router.post('/reset-password', async (req, res) => {
       return res.status(400).json({ error: 'Invalid reset code' });
     }
 
-    const user = userStorage.getUserByEmail(email);
+    const user = await UserModel.getByEmail(email);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -257,14 +271,40 @@ router.post('/reset-password', async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Update user password
-    userStorage.updateUser(user.id, { password: hashedPassword });
-    userStorage.deleteResetCode(email);
+    await UserModel.updatePassword(user.id, hashedPassword);
+    resetCodes.delete(email);
 
     res.json({ message: 'Password reset successfully' });
   } catch (error) {
     console.error('Reset password error:', error);
     res.status(500).json({ error: 'Password reset failed' });
   }
+});
+
+// GET /api/auth/me - Get current user
+const authMiddleware = require('../middleware/authMiddleware');
+router.get('/me', authMiddleware, async (req, res) => {
+  try {
+    const user = await UserModel.getById(req.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      verified: user.verified,
+    });
+  } catch (error) {
+    console.error('Get current user error:', error);
+    res.status(500).json({ error: 'Failed to get user' });
+  }
+});
+
+// POST /api/auth/logout - Logout (just acknowledgement, token cleanup on client)
+router.post('/logout', authMiddleware, (req, res) => {
+  res.json({ message: 'Logged out successfully' });
 });
 
 module.exports = router;
